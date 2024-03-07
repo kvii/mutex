@@ -50,6 +50,7 @@ func acquire(name string, waitMilliseconds uint32) (release func() error, err er
 
 		defer close(chE)
 
+		// https://learn.microsoft.com/zh-cn/windows/win32/api/synchapi/nf-synchapi-createmutexw
 		mu, err := windows.CreateMutex(nil, false, windows.StringToUTF16Ptr(name))
 		if err != nil && !errors.Is(err, syscall.ERROR_ALREADY_EXISTS) {
 			chE <- err
@@ -57,6 +58,7 @@ func acquire(name string, waitMilliseconds uint32) (release func() error, err er
 		}
 		defer windows.CloseHandle(mu)
 
+		// https://learn.microsoft.com/zh-cn/windows/win32/api/synchapi/nf-synchapi-waitforsingleobject
 		rt, err := windows.WaitForSingleObject(mu, waitMilliseconds)
 		if err != nil {
 			chE <- err
