@@ -4,7 +4,6 @@ package mutex
 import (
 	"errors"
 	"runtime"
-	"sync"
 	"syscall"
 	"time"
 
@@ -24,13 +23,13 @@ var (
 const max_WAIT_MILLISECONDS = time.Duration(windows.INFINITE * time.Millisecond)
 
 // Acquire 创建跨进程互斥锁。
-// 返回 Releaser 的 Release 方法用于释放锁资源。它支持被多个协程多次调用，但必须调用一次。
+// 返回 Releaser 的 Release 方法用于释放锁资源。它必须且只能被调用一次。
 func Acquire(name string) (*Releaser, error) {
 	return acquire(name, windows.INFINITE)
 }
 
 // AcquireWithTimeout 创建跨进程互斥锁，并指定最长等待时间。
-// 返回 Releaser 的 Release 方法用于释放锁资源。它支持被多个协程多次调用，但必须调用一次。
+// 返回 Releaser 的 Release 方法用于释放锁资源。它必须且只能被调用一次。
 func AcquireWithTimeout(name string, timeout time.Duration) (*Releaser, error) {
 	if timeout >= max_WAIT_MILLISECONDS {
 		return nil, ErrDurationTooLong
@@ -88,7 +87,7 @@ func acquire(name string, waitMilliseconds uint32) (*Releaser, error) {
 
 	return &Releaser{
 		isAbandoned: isAbandoned,
-		release:     sync.OnceValue(func() error { close(ch); return <-chE }),
+		release:     func() error { close(ch); return <-chE },
 	}, nil
 }
 
@@ -105,7 +104,7 @@ func (r *Releaser) IsAbandoned() bool {
 	return r.isAbandoned
 }
 
-// Release 释放锁资源。该方法支持被多个协程多次调用，但必须调用一次。
+// Release 释放锁资源。该方法必须且只能被调用一次。
 func (r *Releaser) Release() error {
 	return r.release()
 }
