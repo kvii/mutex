@@ -9,23 +9,28 @@ import (
 
 func ExampleAcquire() {
 	r, err := Acquire("kvii_mutex_example_acquire")
-	if err != nil && !errors.Is(err, ErrWaitAbandoned) {
+	if err != nil {
 		panic(err)
 	}
-	defer r()
+	defer r.Release()
+
+	if r.IsAbandoned() {
+		// 检查被加锁的资源是否处于一致状态
+	}
 
 	// Output:
 }
 
 func ExampleAcquireWithTimeout() {
 	r, err := AcquireWithTimeout("kvii_mutex_example_acquire_with_timeout", time.Second)
-	if err != nil && !errors.Is(err, ErrWaitAbandoned) {
+	if err != nil {
 		panic(err)
 	}
-	if errors.Is(err, ErrWaitTimeout) {
-		// return
+	defer r.Release()
+
+	if r.IsAbandoned() {
+		// 检查被加锁的资源是否处于一致状态
 	}
-	defer r()
 
 	// Output:
 }
@@ -41,11 +46,14 @@ func TestAcquire(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		r, e := Acquire(name)
-		if e != nil && !errors.Is(e, ErrWaitAbandoned) {
+		if e != nil {
 			once.Do(func() { err = e })
 		}
-		defer r()
+		defer r.Release()
 
+		if r.IsAbandoned() {
+			t.Log("abandoned")
+		}
 		i++
 	}()
 
@@ -53,10 +61,14 @@ func TestAcquire(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		r, e := Acquire(name)
-		if e != nil && !errors.Is(e, ErrWaitAbandoned) {
+		if e != nil {
 			once.Do(func() { err = e })
 		}
-		defer r()
+		defer r.Release()
+
+		if r.IsAbandoned() {
+			t.Log("abandoned")
+		}
 		i++
 	}()
 
@@ -73,15 +85,15 @@ func TestAcquireWithTimeout(t *testing.T) {
 	const name = "kvii_mutex_test_acquire_with_timeout"
 
 	r1, err := Acquire(name)
-	if err != nil && !errors.Is(err, ErrWaitAbandoned) {
+	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = r1() })
+	t.Cleanup(func() { _ = r1.Release() })
 
 	r2, err := AcquireWithTimeout(name, time.Second)
 	if !errors.Is(err, ErrWaitTimeout) {
-		if err == nil || errors.Is(err, ErrWaitAbandoned) {
-			_ = r2()
+		if err == nil {
+			_ = r2.Release()
 		}
 		t.Fatalf("expect ErrWaitTimeout, got %v", err)
 	}

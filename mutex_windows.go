@@ -12,10 +12,8 @@ import (
 )
 
 var (
-	// ErrWaitAbandoned 表明锁的上一任持有者在没有释放锁时就退出了。
-	// 这很可能是因为上一任持有者发生了严重错误。使用者应该检查被加锁的资源是否处于一致状态。
-	// 注意此时锁已经被当前使用者所持有了，使用者依然需要调用 release 方法。
-	ErrWaitAbandoned = errors.New("mutex acquire: wait abandoned")
+	// errWaitAbandoned 表明锁的上一任持有者在没有释放锁时就退出了。
+	errWaitAbandoned = errors.New("mutex acquire: wait abandoned")
 	// ErrDurationTooLong 表明传入的 duration 太长。
 	ErrDurationTooLong = errors.New("mutex acquire: duration too long")
 	// ErrWaitTimeout 表明等待锁的时间超过了指定的最长等待时间。
@@ -25,22 +23,22 @@ var (
 // 最长等待时间
 const max_WAIT_MILLISECONDS = time.Duration(windows.INFINITE * time.Millisecond)
 
-// Acquire 创建一个新的跨进程互斥锁。
-// 返回的 release 函数用于释放锁资源。它支持被多个协程多次调用，但必须调用一次。
-func Acquire(name string) (release func() error, err error) {
+// Acquire 创建跨进程互斥锁。
+// 返回 Releaser 的 Release 方法用于释放锁资源。它支持被多个协程多次调用，但必须调用一次。
+func Acquire(name string) (*Releaser, error) {
 	return acquire(name, windows.INFINITE)
 }
 
-// AcquireWithTimeout 创建一个新的跨进程互斥锁，并指定最长等待时间。
-// 返回的 release 函数用于释放锁资源。它支持被多个协程多次调用，但必须调用一次。
-func AcquireWithTimeout(name string, timeout time.Duration) (release func() error, err error) {
+// AcquireWithTimeout 创建跨进程互斥锁，并指定最长等待时间。
+// 返回 Releaser 的 Release 方法用于释放锁资源。它支持被多个协程多次调用，但必须调用一次。
+func AcquireWithTimeout(name string, timeout time.Duration) (*Releaser, error) {
 	if timeout >= max_WAIT_MILLISECONDS {
 		return nil, ErrDurationTooLong
 	}
 	return acquire(name, uint32(timeout.Milliseconds()))
 }
 
-func acquire(name string, waitMilliseconds uint32) (release func() error, err error) {
+func acquire(name string, waitMilliseconds uint32) (*Releaser, error) {
 	ch := make(chan struct{})
 	chE := make(chan error)
 
@@ -66,11 +64,11 @@ func acquire(name string, waitMilliseconds uint32) (release func() error, err er
 		}
 		switch rt {
 		case windows.WAIT_ABANDONED:
-			chE <- ErrWaitAbandoned
+			chE <- errWaitAbandoned
 			return
 		case windows.WAIT_OBJECT_0:
 			chE <- nil
-		case uint32(windows.WAIT_TIMEOUT): // unreachable
+		case uint32(windows.WAIT_TIMEOUT): // unreachable if waitMilliseconds is windows.INFINITE
 			chE <- ErrWaitTimeout
 			return
 		default:
@@ -81,9 +79,33 @@ func acquire(name string, waitMilliseconds uint32) (release func() error, err er
 		chE <- windows.ReleaseMutex(mu)
 	}()
 
-	if e := <-chE; e != nil {
-		return nil, e
+	err := <-chE
+	isAbandoned := errors.Is(err, errWaitAbandoned)
+	if err != nil && !isAbandoned {
+		close(ch)
+		return nil, err
 	}
 
-	return sync.OnceValue(func() error { close(ch); return <-chE }), nil
+	return &Releaser{
+		isAbandoned: isAbandoned,
+		release:     sync.OnceValue(func() error { close(ch); return <-chE }),
+	}, nil
+}
+
+// Releaser 用于释放锁资源。
+type Releaser struct {
+	isAbandoned bool
+	release     func() error
+}
+
+// IsAbandoned 表明锁的上一任持有者是否在没有释放锁时就退出了。
+// 这很可能是因为上一任持有者发生了严重错误。使用者应该检查被加锁的资源是否处于一致状态。
+// 注意此时锁已经被当前使用者所持有了，使用者依然需要调用 Release 方法。
+func (r *Releaser) IsAbandoned() bool {
+	return r.isAbandoned
+}
+
+// Release 释放锁资源。该方法支持被多个协程多次调用，但必须调用一次。
+func (r *Releaser) Release() error {
+	return r.release()
 }
